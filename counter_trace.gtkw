@@ -1,0 +1,18 @@
+[*]
+[*] GTKWave save file for Verilator counter demo
+[*]
+[dumpfile] "counter_trace.vcd"
+[timestart] 0
+[size] 1200 760
+[treeopen] TOP.
+[sst_width] 260
+[signals_width] 260
+[color] 1
+@28
+TOP.clk
+TOP.rst
+TOP.en
+@22
+TOP.tb_test_id[7:0]
+TOP.tb_cycle_in_test[15:0]
+TOP.count[3:0]

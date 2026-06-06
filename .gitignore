@@ -1,0 +1,6 @@
+obj_dir/
+annotated/
+html/
+coverage.dat
+coverage.info
+counter_trace.vcd

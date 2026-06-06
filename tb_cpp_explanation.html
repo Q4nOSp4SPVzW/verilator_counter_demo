@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tb.cpp 解説 - Verilator counter demo</title>
+  <style>
+    body {
+      margin: 0;
+      background: #f6f7f9;
+      color: #1f2933;
+      font-family: "Yu Gothic", "Meiryo", "Segoe UI", sans-serif;
+      line-height: 1.7;
+    }
+    header {
+      background: #17324d;
+      color: white;
+      padding: 28px 32px;
+    }
+    header h1 {
+      margin: 0 0 6px;
+      font-size: 28px;
+    }
+    header p {
+      margin: 0;
+      color: #d8e8f8;
+    }
+    main {
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    section {
+      background: white;
+      border: 1px solid #d8dee6;
+      margin: 18px 0;
+      padding: 22px;
+    }
+    h2 {
+      margin: 0 0 12px;
+      font-size: 22px;
+      border-bottom: 1px solid #d8dee6;
+      padding-bottom: 8px;
+    }
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 17px;
+    }
+    code, pre {
+      font-family: Consolas, "Courier New", monospace;
+    }
+    code {
+      background: #eef2f6;
+      padding: 1px 5px;
+    }
+    pre {
+      background: #111827;
+      color: #e5edf7;
+      padding: 12px;
+      overflow-x: auto;
+      border-left: 4px solid #2f80ed;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 10px 0 18px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid #d8dee6;
+      padding: 8px 10px;
+      vertical-align: top;
+    }
+    th {
+      background: #edf1f6;
+      text-align: left;
+    }
+    .note {
+      border-left: 4px solid #a05a00;
+      background: #fff8ec;
+      padding: 10px 12px;
+      margin: 12px 0;
+    }
+    .ok {
+      color: #11845b;
+      font-weight: 700;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>tb.cpp 解説</h1>
+    <p>Verilator counter demo のC++テストベンチを、C++に詳しくない方向けに説明します。</p>
+  </header>
+
+  <main>
+    <section>
+      <h2>1. このファイルの役割</h2>
+      <p>
+        <code>tb.cpp</code> は、Verilatorで変換された <code>counter.sv</code> をC++から動かすテストベンチです。
+        RTLに <code>clk</code>、<code>rst</code>、<code>en</code> を入れ、C++側で計算した期待値と
+        RTLの <code>count</code> を毎サイクル比較します。
+      </p>
+      <ol>
+        <li>RTLカウンタに入力信号を与える。</li>
+        <li>C++側でも「正しいはずのcount」を計算する。</li>
+        <li>RTLの <code>count</code> とC++の期待値を比較する。</li>
+        <li>違っていればFAILで停止する。</li>
+        <li>成功すればカバレッジと波形を保存する。</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>2. 冒頭のinclude</h2>
+      <pre>#include "Vcounter.h"
+#include "verilated.h"
+#include "verilated_cov.h"
+#include "verilated_vcd_c.h"</pre>
+      <table>
+        <tr><th>include</th><th>意味</th></tr>
+        <tr><td><code>Vcounter.h</code></td><td>Verilatorが <code>counter.sv</code> から自動生成するC++モデルです。</td></tr>
+        <tr><td><code>verilated.h</code></td><td>Verilatorシミュレーションの基本機能です。</td></tr>
+        <tr><td><code>verilated_cov.h</code></td><td><code>coverage.dat</code> を保存するために使います。</td></tr>
+        <tr><td><code>verilated_vcd_c.h</code></td><td><code>counter_trace.vcd</code> を保存するために使います。</td></tr>
+      </table>
+    </section>
+
+    <section>
+      <h2>3. 期待値を持つScoreboard</h2>
+      <p>
+        このテストベンチの中心は <code>Scoreboard</code> です。
+        RTLとは別に、C++側で「次のcountはこうなるはず」という期待値を持ちます。
+      </p>
+      <pre>struct Scoreboard {
+    uint8_t expected = 0;
+
+    void step(bool rst, bool en) {
+        if (rst) {
+            expected = 0;
+        } else if (en) {
+            expected = (expected + 1U) & 0x0fU;
+        }
+    }
+};</pre>
+      <table>
+        <tr><th>条件</th><th>期待値</th></tr>
+        <tr><td><code>rst=1</code></td><td><code>count</code> は0になる。</td></tr>
+        <tr><td><code>rst=0, en=0</code></td><td><code>count</code> は前回値を保持する。</td></tr>
+        <tr><td><code>rst=0, en=1</code></td><td><code>count</code> は1増える。</td></tr>
+        <tr><td><code>count=15, en=1</code></td><td>4bitなので0へ戻る。</td></tr>
+      </table>
+      <div class="note">
+        <code>&amp; 0x0f</code> は4bitに丸める処理です。
+        これにより、15の次は16ではなく0になります。
+      </div>
+    </section>
+
+    <section>
+      <h2>4. 1クロック進めるtick</h2>
+      <pre>static void tick(Vcounter* top, VerilatedVcdC* trace) {
+    top-&gt;clk = 0;
+    top-&gt;eval();
+    trace-&gt;dump(sim_time++);
+
+    top-&gt;clk = 1;
+    top-&gt;eval();
+    trace-&gt;dump(sim_time++);
+}</pre>
+      <p>
+        <code>top-&gt;clk</code> を0から1へ動かして、RTLを1クロック進めます。
+        <code>top-&gt;eval()</code> は「今の入力でRTLを評価する」という命令です。
+        <code>trace-&gt;dump()</code> は、その時点の信号をVCD波形へ保存します。
+      </p>
+    </section>
+
+    <section>
+      <h2>5. 1サイクル分の処理</h2>
+      <p>
+        <code>apply_cycle()</code> が、毎サイクルの基本処理です。
+      </p>
+      <ol>
+        <li>RTL入力に <code>rst</code> と <code>en</code> を入れる。</li>
+        <li>波形用に <code>tb_test_id</code> と <code>tb_cycle_in_test</code> を入れる。</li>
+        <li>C++期待値を更新する。</li>
+        <li>クロックを1回進める。</li>
+        <li>RTLの <code>count</code> と期待値を比較する。</li>
+      </ol>
+      <pre>if (got != expected) {
+    fail(test, cycle, got, expected);
+}</pre>
+      <p>
+        値が違うと、どのテストの何サイクルで失敗したかを表示して停止します。
+      </p>
+    </section>
+
+    <section>
+      <h2>6. 各テストの意味</h2>
+      <table>
+        <tr><th>テスト</th><th>確認していること</th></tr>
+        <tr><td><code>reset_test()</code></td><td><code>rst=1</code> の間に <code>count=0</code> になること、リセット解除後に保持されること。</td></tr>
+        <tr><td><code>hold_test()</code></td><td>少しカウントした後、<code>en=0</code> で値が止まること。</td></tr>
+        <tr><td><code>boundary_test()</code></td><td>4bitカウンタが <code>15 -&gt; 0</code> に戻る境界値動作。</td></tr>
+        <tr><td><code>reset_interrupt_test()</code></td><td>カウント中に急に <code>rst=1</code> を入れ、リセットが優先されること。</td></tr>
+        <tr><td><code>enable_toggle_test()</code></td><td><code>en</code> をON/OFFし、ONのときだけ増えること。</td></tr>
+        <tr><td><code>random_stress_test()</code></td><td>1000サイクルのランダムな <code>rst/en</code> 入力でも期待値と一致すること。</td></tr>
+      </table>
+      <p>
+        ランダムテストは <code>std::mt19937</code> を使い、シード値を <code>12345</code> に固定しています。
+        そのため、ランダムでも毎回同じ入力列になり、失敗時に再現できます。
+      </p>
+    </section>
+
+    <section>
+      <h2>7. main関数の流れ</h2>
+      <ol>
+        <li>Verilatorを初期化する。</li>
+        <li><code>Vcounter</code> モデルを作る。</li>
+        <li>VCD波形ファイル <code>counter_trace.vcd</code> を開く。</li>
+        <li>各テストを順番に実行する。</li>
+        <li>全部成功したら <code>[PASS] all tests passed, checks=1060</code> を表示する。</li>
+        <li><code>coverage.dat</code> を保存する。</li>
+        <li>終了処理を行う。</li>
+      </ol>
+      <p class="ok">
+        <code>checks=1060</code> は、1060回 <code>count</code> と期待値を比較したという意味です。
+      </p>
+    </section>
+
+    <section>
+      <h2>8. 波形用のテスト番号</h2>
+      <p>
+        <code>tb_test_id</code> と <code>tb_cycle_in_test</code> はRTLの機能には関係ありません。
+        GTKWaveで波形を見るとき、今どのテスト区間か分かるようにするための信号です。
+      </p>
+      <table>
+        <tr><th><code>tb_test_id</code></th><th>テスト</th></tr>
+        <tr><td>0</td><td>初期リセット</td></tr>
+        <tr><td>1</td><td><code>reset_test()</code></td></tr>
+        <tr><td>2</td><td><code>hold_test()</code></td></tr>
+        <tr><td>3</td><td><code>boundary_test()</code></td></tr>
+        <tr><td>4</td><td><code>reset_interrupt_test()</code></td></tr>
+        <tr><td>5</td><td><code>enable_toggle_test()</code></td></tr>
+        <tr><td>6</td><td><code>random_stress_test()</code></td></tr>
+      </table>
+    </section>
+
+    <section>
+      <h2>9. まとめ</h2>
+      <p>
+        <code>tb.cpp</code> は、単に波形を出すだけのプログラムではありません。
+        C++側に期待値モデルを持ち、RTLの出力と毎サイクル比較する自動テストです。
+        そのうえで、カバレッジとVCD波形も保存するため、動作確認、未到達行の確認、波形確認をまとめて行えます。
+      </p>
+    </section>
+  </main>
+</body>
+</html>
